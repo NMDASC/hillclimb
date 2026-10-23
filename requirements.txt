@@ -1,0 +1,4 @@
+# The environment, metrics, and OpenAI-compatible backend use only the Python standard library (3.10+).
+pytest>=7
+# For running models on a GPU node with the vllm backend (or `vllm serve` + the openai backend):
+# vllm>=0.8
