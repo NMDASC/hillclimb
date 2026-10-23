@@ -1,0 +1,35 @@
+{
+  "cmd": "probe",
+  "tasks": "data/tasks.jsonl",
+  "n_per_family": 50,
+  "seed": 0,
+  "families": null,
+  "limit_per_family": null,
+  "backend": "vllm",
+  "model": "Qwen/Qwen3-4B",
+  "name": "qwen3-4b",
+  "base_url": "http://localhost:8000/v1",
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "max_tokens": 1024,
+  "no_think": "template",
+  "concurrency": 16,
+  "no_n": false,
+  "max_model_len": 8192,
+  "lora": null,
+  "out": "results/probe_qwen3-4b",
+  "ks": [
+    1,
+    2,
+    4
+  ],
+  "variants": [
+    "transient",
+    "switch",
+    "blocked_obs",
+    "blocked_unobs"
+  ],
+  "samples": 10,
+  "no_k0": false,
+  "fn": "<function cmd_probe at 0x74eaad03b910>"
+}
