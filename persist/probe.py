@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from .actions import parse_action
 from .classify import classify_next
-from .constants import SETBACK_VARIANTS
+from .constants import DEFAULT_OVERRIDE_DESC, SETBACK_VARIANTS
 from .core import Task
 from .env import ToolEnv, tool_map
 from .prompts import build_messages
@@ -63,8 +63,9 @@ def run_probe_scripted(states: list[ProbeState], policy_cls) -> list[dict]:
     return records
 
 
-def run_probe_llm(states: list[ProbeState], backend, policy_name: str, n: int = 10) -> list[dict]:
-    convs = [build_messages(s.task, s.history) for s in states]
+def run_probe_llm(states: list[ProbeState], backend, policy_name: str, n: int = 10,
+                  override_desc: str = DEFAULT_OVERRIDE_DESC) -> list[dict]:
+    convs = [build_messages(s.task, s.history, override_desc) for s in states]
     outs = backend.sample(convs, n=n)
     records = []
     for s, samples in zip(states, outs):

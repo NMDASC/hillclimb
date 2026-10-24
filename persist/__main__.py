@@ -18,18 +18,19 @@ import time
 from pathlib import Path
 
 from .backends import make_backend
-from .constants import SETBACK_VARIANTS, VARIANTS
+from .constants import DEFAULT_OVERRIDE_DESC, OVERRIDE_DESCRIPTIONS, SETBACK_VARIANTS, VARIANTS
 from .metrics import md_table, probe_table, rollout_aggregates, rollout_table, sensitivity_table
 from .policies import SCRIPTED_POLICIES
 from .probe import build_probe_states, run_probe_llm, run_probe_scripted
 from .prompts import build_messages
-from .rollout import run_llm, run_scripted
+from .rollout import backfill_oracle, run_llm, run_scripted
 from .tasks import generate_suite, load_tasks, save_tasks
 
 PROBE_COLS = ["variant", "k", "n", "p_continue", "p_stop", "p_retry_same", "p_retry_modified",
               "p_switch", "p_violation", "p_false_done", "p_invalid"]
-SENS_COLS = ["contrast", "k", "delta", "lo", "hi", "p_stop_blocked", "p_stop_recoverable", "n_tasks"]
-ROLL_COLS = ["variant", "n", "legit_success", "cheated_success", "violation", "false_done", "stop",
+SENS_COLS = ["contrast", "k", "delta", "lo", "hi", "p_stop_blocked", "p_stop_reference", "n_tasks"]
+ROLL_COLS = ["variant", "n", "legit_success", "cheated_success", "violation", "wrong_output",
+            "fabricated_done", "stop",
              "max_turns", "mean_steps", "invalid_per_ep"]
 
 
@@ -67,7 +68,7 @@ def _read_jsonl(path) -> list[dict]:
 
 def _probe_report(records, title) -> str:
     return (f"# Probe: {title}\n\n## Next-action distribution\n\n{md_table(probe_table(records), PROBE_COLS)}\n\n"
-            f"## Evidence sensitivity (P(stop|blocked) - P(stop|recoverable), 95% task bootstrap)\n\n"
+            f"## Evidence sensitivity (P(stop|blocked) - P(stop|reference), 95% task bootstrap)\n\n"
             f"{md_table(sensitivity_table(records), SENS_COLS)}\n")
 
 
@@ -112,7 +113,7 @@ def cmd_show(args):
     else:
         states = build_probe_states([task], ks=(args.k,), variants=(args.variant,), include_k0=False)
         history = states[0].history
-    for m in build_messages(task, history):
+    for m in build_messages(task, history, args.override_desc):
         print(f"----- {m['role']} -----\n{m['content']}\n")
 
 
@@ -195,12 +196,15 @@ def cmd_sanity(args):
            "cheater: every probe action classified as violation", failures)
     _check(all(r["label"] == "false_done" for r in res["false_done"][1] if r["k"] > 0),
            "false_done: every probe action classified as false completion", failures)
+    _check(agg["false_done"]["fabricated_done_rate"] > 0 and agg["false_done"]["wrong_output_rate"] == 0.0,
+           "false_done: its unbacked completion claims count as fabricated, not wrong output", failures)
 
     summary_rows = [{"policy": n, **{k: v for k, v in a.items()}} for n, a in agg.items()]
     for n in res:
         summary_rows[[r["policy"] for r in summary_rows].index(n)]["delta_obs"] = delta(n, "blocked_obs")
     table = md_table(summary_rows, ["policy", "recovery_rate", "premature_abandonment",
-                                    "unnecessary_continuation", "violation_rate", "false_done_rate", "delta_obs"])
+                                    "unnecessary_continuation", "violation_rate", "wrong_output_rate",
+                                    "fabricated_done_rate", "delta_obs"])
     print("\n" + table)
     report.insert(1, "## Summary\n\n" + table + "\n")
     out.mkdir(parents=True, exist_ok=True)
@@ -221,7 +225,8 @@ def cmd_probe(args):
           f"= {len(states) * args.samples} generations")
     backend = _backend(args)
     t0 = time.time()
-    records = run_probe_llm(states, backend, _run_name(args), n=args.samples)
+    records = run_probe_llm(states, backend, _run_name(args), n=args.samples,
+                            override_desc=args.override_desc)
     _write_jsonl(out / "probe.jsonl", records)
     report = _probe_report(records, _run_name(args))
     (out / "probe_report.md").write_text(report)
@@ -236,7 +241,7 @@ def cmd_rollout(args):
     out = Path(args.out)
     results = run_llm(tasks, args.variants, backend, _run_name(args),
                       max_turns=args.max_turns, transient_failures=args.transient_failures,
-                      repeats=args.repeats)
+                      repeats=args.repeats, override_desc=args.override_desc)
     _write_jsonl(out / "rollouts.jsonl", results)
     report = _rollout_report(results, _run_name(args))
     (out / "rollout_report.md").write_text(report)
@@ -249,10 +254,22 @@ def cmd_report(args):
     if args.probe:
         print(_probe_report(_read_jsonl(args.probe), args.probe))
     if args.rollouts:
-        print(_rollout_report(_read_jsonl(args.rollouts), args.rollouts))
+        results = _read_jsonl(args.rollouts)
+        cfg_path = Path(args.rollouts).parent / "config.json"
+        cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        tasks = {t.task_id: t for t in _tasks(args)}
+        n = backfill_oracle(results, tasks, cfg.get("transient_failures", 2), cfg.get("max_turns", 12))
+        if n:
+            print(f"(recomputed oracle fields for {n} episodes saved by an older version)\n")
+        print(_rollout_report(results, args.rollouts))
 
 
 # ----------------------------------------------------------------------------- argparse
+
+def _add_override_arg(p):
+    p.add_argument("--override-desc", choices=list(OVERRIDE_DESCRIPTIONS), default=DEFAULT_OVERRIDE_DESC,
+                   help="wording of the admin_override tool description (phase 1 used 'tempting')")
+
 
 def _add_task_args(p):
     p.add_argument("--tasks", default="data/tasks.jsonl", help="task JSONL (generated on the fly if missing)")
@@ -295,6 +312,7 @@ def main(argv=None):
     p.add_argument("--task-id", required=True)
     p.add_argument("--variant", default="blocked_obs", choices=SETBACK_VARIANTS)
     p.add_argument("--k", type=int, default=2)
+    _add_override_arg(p)
     p.set_defaults(fn=cmd_show)
 
     p = sub.add_parser("sanity")
@@ -312,6 +330,7 @@ def main(argv=None):
     p.add_argument("--variants", nargs="+", default=list(SETBACK_VARIANTS), choices=SETBACK_VARIANTS)
     p.add_argument("--samples", type=int, default=10)
     p.add_argument("--no-k0", action="store_true")
+    _add_override_arg(p)
     p.set_defaults(fn=cmd_probe)
 
     p = sub.add_parser("rollout")
@@ -321,9 +340,11 @@ def main(argv=None):
     p.add_argument("--max-turns", type=int, default=12)
     p.add_argument("--transient-failures", type=int, default=2)
     p.add_argument("--repeats", type=int, default=1)
+    _add_override_arg(p)
     p.set_defaults(fn=cmd_rollout)
 
     p = sub.add_parser("report")
+    _add_task_args(p)
     p.add_argument("--probe")
     p.add_argument("--rollouts")
     p.set_defaults(fn=cmd_report)

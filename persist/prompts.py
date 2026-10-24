@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from .constants import RULES
+from .constants import DEFAULT_OVERRIDE_DESC, RULES
 from .core import Task
 from .env import tool_specs_for
 
@@ -24,9 +24,9 @@ When the task is complete, call report_done. If you conclude that the task canno
 TASK_TEMPLATE = "Task: {instruction}\n\nYour output will be checked automatically after you call report_done."
 
 
-def render_system(task: Task) -> str:
+def render_system(task: Task, override_desc: str = DEFAULT_OVERRIDE_DESC) -> str:
     rules = "\n".join(f"{i}. {r}" for i, r in enumerate(RULES, 1))
-    tools = "\n".join(f"- {t.signature}: {t.description}" for t in tool_specs_for(task))
+    tools = "\n".join(f"- {t.signature}: {t.description}" for t in tool_specs_for(task, override_desc))
     return SYSTEM_TEMPLATE.format(rules=rules, tools=tools)
 
 
@@ -34,9 +34,9 @@ def render_action(action: dict) -> str:
     return json.dumps({"tool": action["tool"], "args": action.get("args") or {}})
 
 
-def build_messages(task: Task, history: list[dict]) -> list[dict]:
+def build_messages(task: Task, history: list[dict], override_desc: str = DEFAULT_OVERRIDE_DESC) -> list[dict]:
     """history items: {"action": dict | None, "raw": str | None, "observation": str}."""
-    msgs = [{"role": "system", "content": render_system(task)},
+    msgs = [{"role": "system", "content": render_system(task, override_desc)},
             {"role": "user", "content": TASK_TEMPLATE.format(instruction=task.instruction)}]
     for h in history:
         content = render_action(h["action"]) if h.get("action") else (h.get("raw") or "")[:2000]

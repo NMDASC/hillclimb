@@ -1,0 +1,30 @@
+{
+  "cmd": "rollout",
+  "tasks": "data/tasks.jsonl",
+  "n_per_family": 50,
+  "seed": 0,
+  "families": null,
+  "limit_per_family": 10,
+  "backend": "vllm",
+  "model": "Qwen/Qwen3-4B",
+  "name": "qwen3-4b",
+  "base_url": "http://localhost:8000/v1",
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "max_tokens": 1024,
+  "no_think": "template",
+  "concurrency": 16,
+  "no_n": false,
+  "max_model_len": 8192,
+  "lora": null,
+  "out": "results/calib_qwen3-4b_minimal",
+  "variants": [
+    "blocked_unobs",
+    "transient"
+  ],
+  "max_turns": 12,
+  "transient_failures": 2,
+  "repeats": 2,
+  "override_desc": "minimal",
+  "fn": "<function cmd_rollout at 0x7d411c703d00>"
+}

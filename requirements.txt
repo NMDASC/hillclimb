@@ -2,3 +2,5 @@
 pytest>=7
 # For running models on a GPU node with the vllm backend (or `vllm serve` + the openai backend):
 # vllm>=0.8
+# For regenerating the report figures (report/make_figures.py):
+# matplotlib>=3.7

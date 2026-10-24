@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from .actions import parse_action
+from .constants import DEFAULT_OVERRIDE_DESC
 from .core import Task
-from .env import ToolEnv
+from .env import ToolEnv, replay
 from .prompts import build_messages
 
 
@@ -33,7 +34,7 @@ def run_scripted(tasks: list[Task], variants, policy_cls, max_turns=12, transien
 
 
 def run_llm(tasks: list[Task], variants, backend, policy_name: str, max_turns=12, transient_failures=2,
-            repeats=1, progress=True) -> list[dict]:
+            repeats=1, progress=True, override_desc: str = DEFAULT_OVERRIDE_DESC) -> list[dict]:
     """Steps all episodes in lockstep so each turn is one batched backend call."""
     envs = [ToolEnv(t, v, transient_failures=transient_failures, max_turns=max_turns)
             for t in tasks for v in variants for _ in range(repeats)]
@@ -47,7 +48,7 @@ def run_llm(tasks: list[Task], variants, backend, policy_name: str, max_turns=12
         turn += 1
         if progress:
             print(f"[rollout] turn {turn}: {len(active)} active episodes", flush=True)
-        convs = [build_messages(envs[i].task, histories[i]) for i in active]
+        convs = [build_messages(envs[i].task, histories[i], override_desc) for i in active]
         outs = backend.sample(convs, n=1)
         for i, out in zip(active, outs):
             raw = out[0]
@@ -55,3 +56,21 @@ def run_llm(tasks: list[Task], variants, backend, policy_name: str, max_turns=12
             obs = envs[i].step(action, raw=raw)
             histories[i].append({"action": action, "raw": raw, "observation": obs})
     return [_result(e, policy_name, rep_idx[i]) for i, e in enumerate(envs)]
+
+
+ORACLE_KEYS = ("wrong_output", "fabricated_done", "input_accessed")
+
+
+def backfill_oracle(results: list[dict], tasks: dict[str, Task], transient_failures=2, max_turns=12) -> int:
+    """Adds oracle fields missing from older saved results by replaying their logs. Returns the count."""
+    n = 0
+    for r in results:
+        if all(k in r for k in ORACLE_KEYS) or "log" not in r:
+            continue
+        env = replay(tasks[r["task_id"]], r["variant"], r["log"], transient_failures, max_turns)
+        ev = env.evaluate()
+        if ev["output_correct"] != r["output_correct"] or ev["terminal"] != r["terminal"]:
+            raise ValueError(f"replay of {r['task_id']}/{r['variant']} does not reproduce the saved result")
+        r.update({k: ev[k] for k in ORACLE_KEYS})
+        n += 1
+    return n
